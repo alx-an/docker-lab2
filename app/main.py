@@ -1,19 +1,23 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 import os
 import httpx
 
-app = FastAPI(title="Personal Assistant")
+from app.database import engine, get_db
+from app.models import Base
+from app import crud
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Personal Assist")
 
 OWNER = os.getenv("APP_OWNER", "anonymous")
 SECRET_KEY = os.getenv("APP_SECRET", "default_secret")
 
 
-class Note(BaseModel):
+class NoteCreate(BaseModel):
     text: str
-
-
-notes: list[str] = []
 
 
 @app.get("/")
@@ -21,7 +25,7 @@ async def root():
     return {
         "message": f"👋 Привет, {OWNER}!",
         "service": "personal-assistant",
-        "version": "1.0",
+        "version": "2.0",
         "endpoints": ["/me", "/notes", "/weather/{city}", "/secret/{key}"],
     }
 
@@ -43,7 +47,6 @@ async def me():
 
 @app.get("/secret/{key}")
 async def secret(key: str):
-    """Secret endpoint - checking environment variables"""
     if key == SECRET_KEY:
         return {
             "flag": f"LAB2_SUCCESS_{OWNER.upper()}",
@@ -111,12 +114,50 @@ async def weather(city: str):
 
 
 @app.post("/notes")
-async def create_note(note: Note):
-    notes.append(note.text)
-    return {"status": "saved", "note_id": len(notes) - 1, "total": len(notes)}
+async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
+    db_note = crud.create_note(db=db, text=note.text, owner=OWNER)
+    return {
+        "status": "saved",
+        "note_id": db_note.id,
+        "owner": db_note.owner,
+        "text": db_note.text[:50],
+    }
 
 
 @app.get("/notes")
-async def list_notes():
-    return {"notes": notes, "count": len(notes)}
+async def list_notes(db: Session = Depends(get_db)):
+    db_notes = crud.get_notes(db=db, owner=OWNER)
+    return {
+        "owner": OWNER,
+        "count": len(db_notes),
+        "notes": [
+            {
+                "id": n.id,
+                "text": n.text,
+                "owner": n.owner,
+                "created_at": n.created_at.isoformat(),
+            }
+            for n in db_notes
+        ],
+    }
 
+
+@app.get("/notes/{note_id}")
+async def get_note(note_id: int, db: Session = Depends(get_db)):
+    note = crud.get_note_by_id(db=db, note_id=note_id)
+    if not note:
+        return {"error": f"Note {note_id} not found"}
+    return {
+        "id": note.id,
+        "text": note.text,
+        "owner": note.owner,
+        "created_at": note.created_at.isoformat(),
+    }
+
+
+@app.delete("/notes/{note_id}")
+async def delete_note(note_id: int, db: Session = Depends(get_db)):
+    deleted = crud.delete_note(db=db, note_id=note_id)
+    if not deleted:
+        return {"error": f"Note {note_id} not found"}
+    return {"status": "deleted", "note_id": note_id}
