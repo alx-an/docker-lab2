@@ -69,8 +69,7 @@ WEATHER_CODES: dict[int, str] = {
 }
 
 
-@app.get("/weather/{city}")
-async def weather(city: str):
+async def _weather_uncached(city: str):
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             geo_resp = await client.get(
@@ -161,3 +160,45 @@ async def delete_note(note_id: int, db: Session = Depends(get_db)):
     if not deleted:
         return {"error": f"Note {note_id} not found"}
     return {"status": "deleted", "note_id": note_id}
+
+
+# Redis weather cache
+import json
+import redis.asyncio as redis_async
+
+CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))
+redis_client = redis_async.from_url(
+    os.getenv("REDIS_URL", "redis://redis:6379/0"),
+    decode_responses=True
+)
+
+@app.get("/weather/{city}")
+async def weather(city: str):
+    owner = os.getenv("APP_OWNER", "andreev")
+    key = f"weather:{owner}:{city.lower()}"
+
+    cached = await redis_client.get(key)
+    if cached is not None:
+        return {**json.loads(cached), "source": "cache"}
+
+    result = await _weather_uncached(city)
+    if not isinstance(result, dict) or result.get("error"):
+        return result
+
+    result = {**result, "source": "api"}
+    await redis_client.setex(
+        key, CACHE_TTL, json.dumps(result, ensure_ascii=False)
+    )
+    return result
+
+@app.get("/cache/stats")
+async def cache_stats():
+    owner = os.getenv("APP_OWNER", "andreev")
+    keys = await redis_client.keys(f"weather:{owner}:*")
+
+    return {
+        "owner": owner,
+        "ttl_seconds": CACHE_TTL,
+        "cached_count": len(keys),
+        "cached_cities": sorted(k.rsplit(":", 1)[-1] for k in keys)
+    }

@@ -199,3 +199,67 @@ docker network ls --filter 'name=andreev-'
 
 В исходном репозитории отдельная лицензия не указана.
 Этот fork не устанавливает новую лицензию на исходный код.
+
+## Docker Compose (ЛР4)
+
+В лабораторной работе №4 приложение FastAPI, PostgreSQL 15 и Redis 7
+объединены в Docker Compose.
+
+### Сервисы
+
+- `app` — FastAPI, порт 8098.
+- `db` — PostgreSQL 15, внешний порт 5528.
+- `redis` — Redis 7, внешний порт 6468.
+
+PostgreSQL использует существующий том `andreev-pgdata` из ЛР3.
+Приложение запускается после проверки готовности PostgreSQL и Redis.
+
+### Запуск
+
+Команды выполняются из каталога `solutions/assist-py/`.
+
+Перед запуском необходимо создать `.env` по образцу `.env.example`
+и указать действительные учётные данные PostgreSQL.
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Проверка приложения:
+
+```bash
+curl http://localhost:8098/health
+curl http://localhost:8098/notes
+curl http://localhost:8098/weather/Moscow
+curl http://localhost:8098/cache/stats
+```
+
+### Redis-кэширование
+
+Результаты запросов погоды сохраняются в Redis на 120 секунд.
+Повторный запрос получает данные из кэша без обращения к погодному API.
+Ключи имеют формат `weather:andreev:<city>`.
+
+### Масштабирование
+
+Для запуска трёх экземпляров приложения используется отдельная
+конфигурация `docker-compose.scale.yml`.
+
+```bash
+docker compose down
+docker compose -f docker-compose.scale.yml up -d --build --scale app=3
+docker compose -f docker-compose.scale.yml ps
+```
+
+Каждый экземпляр получает отдельный внешний порт и использует общие
+PostgreSQL и Redis.
+
+Возврат к обычной конфигурации:
+
+```bash
+docker compose -f docker-compose.scale.yml down
+docker compose up -d
+```
+
+Именованный том PostgreSQL при обычной остановке Compose сохраняется.
